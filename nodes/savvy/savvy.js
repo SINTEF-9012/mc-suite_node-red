@@ -25,33 +25,40 @@ module.exports = function (RED) {
         this.locationid = n.locationid;
         this.machineid = n.machineid;
         this.groupid = n.groupid;
-        this.cncmanufacturer = n.cncmanufacturer;
+		this.cncmanufacturer = n.cncmanufacturer;
+		//The flag that indicates if the stream should be stopped
+		this.stream_status=false;
 
         // copy "this" object in case we need it in context of callbacks of other functions.
         var node = this;
 
         // respond to inputs....
-        this.on('input', function (msg) {
+        this.on('input', function (msg_input) {
 			
             var method = computeEndpoint(node);
+			
+			if(typeof msg_input.stream_status !== 'undefined'){
+				node.stream_status=msg_input.stream_status;
+				console.log(node.stream_status);
+			}
 
-            sendGet(msg, method, node, function (res) {
-				
-				console.log("Callback sendGet");
-                var msg = {};
-				switch(node.returntype) {
-					case "utf-8":
-						msg.payload = res;
-						break;
-					case "json":
-						msg.payload = JSON.parse(res);
-						break;
-				}
-						
-				// Send the CNC manufacturer as msg parameter
-				msg.cncmanufacturer = node.cncmanufacturer;
-				node.send(msg);
-            });
+				sendGet(msg_input, method, node, function (res) {
+					
+					console.log("Callback sendGet");
+					var msg = {};
+					switch(node.returntype) {
+						case "utf-8":
+							msg.payload = res;
+							break;
+						case "json":
+							msg.payload = JSON.parse(res);
+							break;
+					}
+							
+					// Send the CNC manufacturer as msg parameter
+					msg.cncmanufacturer = node.cncmanufacturer;
+					node.send(msg);
+				});
 		});
 
         this.on("close", function () {
@@ -116,9 +123,15 @@ module.exports = function (RED) {
 					var str = ''
 					response.on('data', function (chunk) {
 
+
 						// If we are streaming , we return the chunk itself as the full response is in one chunk
 						if (node.target === "stream")
 						{	
+							//Stop the stream if the flag has changed.
+							if(!node.stream_status){
+								response.destroy();
+							}
+
 							// The '' + chunk is added to convert the buffer into a string, and 
 							var chunkedData = '' + chunk;
 							
@@ -211,10 +224,34 @@ module.exports = function (RED) {
         var algorithm = algorithm || "sha1";
 
         return crypto.createHmac(algorithm, secret).update(data).digest(encoding);
-    }
+	}
 
     // Register the node by name. This must be called before overriding any of the
     // Node functions.
     RED.nodes.registerType("savvy", savvyNode);
+
+
+
+	//Retrieve input from the left button
+	RED.httpAdmin.post("/savvy/:id", RED.auth.needsPermission("savvy.write"), function(req,res) {
+		var adminNode = RED.nodes.getNode(req.params.id);
+		if (adminNode != null) {
+			try {
+				//We change the download flag
+				adminNode.stream_status=!adminNode.stream_status;
+				if(!adminNode.stream_status && (adminNode.target === "stream")){
+					console.log("Stopping the stream");
+				}else{
+					adminNode.receive();
+				}
+				res.sendStatus(200);
+			} catch(err) {
+				res.sendStatus(500);
+				adminNode.error(RED._("savvy.failed",{error:err.toString()}));
+			}
+		} else {
+			res.sendStatus(404);
+		}
+	});
 
 }
